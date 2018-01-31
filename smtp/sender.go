@@ -9,6 +9,7 @@ import (
 	"errors"
 	"net/mail"
 	"crypto/tls"
+	"github.com/toorop/go-dkim"
 )
 
 type sender struct {
@@ -17,18 +18,31 @@ type sender struct {
 
 	elo string
 	from mail.Address
+	fromHost string
+
+	dkimSelector string
+	privateKey []byte
 }
 
 func New(logger *zap.Logger, elo string, from mail.Address) (*sender, error) {
 	dialer := net.Dialer{Timeout: time.Second * 10}
-	return &sender{logger: logger, dialer: &dialer, elo: elo, from: from}, nil
+
+	_, fromHost, err := LocalAndDomainForEmailAddress(from.Address)
+	if err != nil {
+		return nil, err
+	}
+	return &sender{logger: logger, dialer: &dialer, elo: elo, from: from, fromHost: fromHost}, nil
 }
 
+func (s *sender) SetDKIM(selector string, privateKey []byte) {
+	s.dkimSelector = selector
+	s.privateKey = privateKey
+}
 
 func (s *sender) Send(ctx context.Context, to mail.Address) error {
 	s.logger.Debug("Sending...")
 
-	msg := []byte("From: Magic <magic@test.com>\nTo: R <rahul@redsift.io>\nSubject: Testing\nHello, you want testing")
+	msg := []byte("From: Magic <magic@test.com>\r\nTo: R <rahul@redsift.io>\r\nSubject: Testing\r\n\r\nHello, you want testing")
 	return s.sendTo(ctx, to, msg)
 }
 
@@ -53,6 +67,26 @@ func (s *sender) sendTo(ctx context.Context, to mail.Address, msg []byte) error 
 	conn, err := s.dialer.DialContext(ctx, "tcp", mx + ":smtp")
 	if err != nil {
 		return err
+	}
+
+	if s.dkimSelector != "" {
+
+		options := dkim.NewSigOptions()
+		options.PrivateKey = s.privateKey
+		options.Domain = s.fromHost
+		options.Selector = s.dkimSelector
+		options.SignatureExpireIn = 3600
+		options.BodyLength = 0 // TODO: uint(len(msg))
+
+		// From:From:Subject:Subject:Date:To:To:MIME-Version:Content-Type
+		// via https://wordtothewise.com/2014/05/dkim-injected-headers/
+		//options.Headers = []string{"from", "subject"}
+		options.Headers = []string{"from", "from", "subject", "subject", "date", "to", "to", "mime-version", "content-type", "return-path", "in-reply-to", "references", "cc"}
+		options.AddSignatureTimestamp = true
+		options.Canonicalization = "relaxed/relaxed"
+		if err := dkim.Sign(&msg, options); err != nil {
+			return err
+		}
 	}
 
 	c := make(chan error, 1)

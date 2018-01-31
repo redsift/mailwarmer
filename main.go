@@ -10,6 +10,7 @@ import (
 	"go.uber.org/zap"
 	"github.com/redsift/mailwarmer/smtp"
 	"net/mail"
+	"io/ioutil"
 )
 
 const (
@@ -86,6 +87,12 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+
+	key, err := ioutil.ReadFile("./privkey.pem")
+	if err != nil {
+		panic(err)
+	}
+	sender.SetDKIM("warm", key)
 
 	ctx := context.Background()
 

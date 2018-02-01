@@ -11,6 +11,8 @@ import (
 	"github.com/redsift/mailwarmer/smtp"
 	"net/mail"
 	"io/ioutil"
+	"github.com/redsift/mailwarmer/network"
+	"github.com/miekg/dns"
 )
 
 const (
@@ -20,6 +22,8 @@ const (
 	EnvMaxRate = "SEND_MAX"
 	EnvRateCoefficient = "SEND_COEF"
 	EnvTimeOffset = "SEND_OFFSET"
+	EnvSimuate = "SIMULATE"
+	EnvEhlo = "EHLO"
 )
 
 var (
@@ -34,6 +38,11 @@ var (
 	pMinRate    = kingpin.Flag("send-min-rate", "Minimum send rate per day").Default("50").Envar(EnvMinRate).Float64()
 	pCoefficient    = kingpin.Flag("send-coefficient", "Exponent multiplication factor").Default("40").Envar(EnvRateCoefficient).Float64()
 	pMaxRate    = kingpin.Flag("send-max-rate", "Maximum send rate per day").Default("2000").Envar(EnvMaxRate).Float64()
+
+
+	pEhlo = kingpin.Flag("ehlo", "SMTP ehlo").Default("").Envar(EnvEhlo).String()
+	pSimuate    = kingpin.Flag("simulate", "Do not send emails").Short('s').Default("false").Envar(EnvSimuate).Bool()
+
 )
 
 const (
@@ -83,7 +92,37 @@ func main() {
 	kingpin.Version(version)
 	kingpin.Parse()
 
-	sender, err := smtp.New(logger, "", mail.Address{Name: "Magic", Address: "magic@test.com"})
+
+
+	ip, err := network.MyIp()
+	if err != nil {
+		panic(err)
+	}
+
+	ptr, err := network.ReverseLookup(ip)
+	if err != nil {
+		panic(err)
+	}
+
+	logger.Info("Starting mailwarmer", zap.String("version", version), zap.Stringer("ip", ip), zap.String("ptr", ptr))
+
+	ehlo := *pEhlo
+	if ehlo == "" {
+		ehlo = ptr
+	} else {
+		ehlo = dns.Fqdn(ehlo)
+	}
+
+	fwd, err := network.ForwardLookupA(ptr) //TODO: ipv6
+	if err != nil || len(fwd) == 0 {
+		logger.Warn("Deliverability issue detected, no A or AAAA record set for sender", zap.String("fqdn", ptr))
+	} else 	if !network.Contains(fwd, ip) {
+		logger.Warn("Deliverability issue detected, FCrDNS does not match", zap.Stringer("forward", ip), zap.String("reverse", network.StringIps(fwd))) //TODO: Point at URL
+	} else if ehlo != ptr {
+		logger.Warn("Deliverability issue detected, EHLO should match PTR record")
+	}
+
+	sender, err := smtp.New(logger, ehlo, mail.Address{Name: "Magic", Address: "magic@test.com"})
 	if err != nil {
 		panic(err)
 	}
@@ -94,12 +133,14 @@ func main() {
 	}
 	sender.SetDKIM("warm", key)
 
+
 	ctx := context.Background()
 
 	var rt float64
 	v, _ := limit(rt)
 	limiter := rate.NewLimiter(v, 1)
-
+	i := 0
+	e := 0
 	for {
 		t := time.Now().Sub(start) + *pTimeOffset
 
@@ -112,8 +153,20 @@ func main() {
 
 		limiter.Wait(ctx)
 
-		if err := sender.Send(ctx, mail.Address{Name: "Rahul Powar", Address: "rahul@redsift.io"}); err != nil {
-			logger.Error("Send failed", zap.Error(err))
+		to := mail.Address{Name: "Rahul Powar", Address: "rahul@redsift.io"}
+
+		if *pSimuate {
+			i++
+			logger.Info("Simulating only", zap.Int("sent", i))
+			continue
+		}
+
+		if err := sender.Send(ctx, to); err != nil {
+			e++
+			logger.Error("Send failed", zap.Error(err), zap.Int("errors", e))
+		} else {
+			i++
+			logger.Info("Sent email", zap.Int("sent", i), zap.Int("errors", e))
 		}
 	}
 }

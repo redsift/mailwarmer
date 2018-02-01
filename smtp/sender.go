@@ -16,7 +16,7 @@ type sender struct {
 	logger *zap.Logger
 	dialer *net.Dialer
 
-	elo string
+	ehlo string
 	from mail.Address
 	fromHost string
 
@@ -24,14 +24,14 @@ type sender struct {
 	privateKey []byte
 }
 
-func New(logger *zap.Logger, elo string, from mail.Address) (*sender, error) {
+func New(logger *zap.Logger, ehlo string, from mail.Address) (*sender, error) {
 	dialer := net.Dialer{Timeout: time.Second * 10}
 
 	_, fromHost, err := LocalAndDomainForEmailAddress(from.Address)
 	if err != nil {
 		return nil, err
 	}
-	return &sender{logger: logger, dialer: &dialer, elo: elo, from: from, fromHost: fromHost}, nil
+	return &sender{logger: logger, dialer: &dialer, ehlo: ehlo, from: from, fromHost: fromHost}, nil
 }
 
 func (s *sender) SetDKIM(selector string, privateKey []byte) {
@@ -102,11 +102,11 @@ func (s *sender) sendTo(ctx context.Context, to mail.Address, msg []byte) error 
 			return
 		}
 
-		elo := s.elo
-		if elo == "" {
-			elo = "localhost"
+		ehlo := s.ehlo
+		if ehlo == "" {
+			ehlo = "localhost"
 		}
-		err = client.Hello(elo)
+		err = client.Hello(ehlo)
 		if err != nil {
 			c <- err
 			return

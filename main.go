@@ -40,7 +40,7 @@ var (
 	pMaxRate    = kingpin.Flag("send-max-rate", "Maximum send rate per day").Default("2000").Envar(EnvMaxRate).Float64()
 
 
-	pEhlo = kingpin.Flag("ehlo", "SMTP ehlo").Default("").Envar(EnvEhlo).String()
+	pEhlo = kingpin.Flag("ehlo", "SMTP ehlo. Either the FQDN or the address literal e.g. [192.0.2.1] or [IPv6:fe80::1]").Default("").Envar(EnvEhlo).String()
 	pSimuate    = kingpin.Flag("simulate", "Do not send emails").Short('s').Default("false").Envar(EnvSimuate).Bool()
 
 )
@@ -119,7 +119,7 @@ func main() {
 	} else 	if !network.Contains(fwd, ip) {
 		logger.Warn("Deliverability issue detected, FCrDNS does not match", zap.Stringer("forward", ip), zap.String("reverse", network.StringIps(fwd))) //TODO: Point at URL
 	} else if ehlo != ptr {
-		logger.Warn("Deliverability issue detected, EHLO should match PTR record")
+		logger.Warn("Deliverability issue detected, EHLO parameter should match PTR record")
 	}
 
 	sender, err := smtp.New(logger, ehlo, mail.Address{Name: "Magic", Address: "magic@test.com"})

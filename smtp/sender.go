@@ -10,21 +10,31 @@ import (
 	"net/mail"
 	"crypto/tls"
 	"github.com/toorop/go-dkim"
+	"fmt"
+	"github.com/redsift/go-foodfans"
+	"math/rand"
+	"strings"
 )
+
+var do = []string{"Should we", "Do you like to", "Perhaps we should"}
 
 type sender struct {
 	logger *zap.Logger
 	dialer *net.Dialer
 
 	ehlo string
-	from mail.Address
+	from *mail.Address
 	fromHost string
 
 	dkimSelector string
 	privateKey []byte
 }
 
-func New(logger *zap.Logger, ehlo string, from mail.Address) (*sender, error) {
+func makeSubject() string {
+	return do[rand.Intn(len(do))] + " " + strings.Replace(foodfans.New(), "_", " ", -1)
+}
+
+func New(logger *zap.Logger, ehlo string, from *mail.Address) (*sender, error) {
 	dialer := net.Dialer{Timeout: time.Second * 10}
 
 	_, fromHost, err := LocalAndDomainForEmailAddress(from.Address)
@@ -34,19 +44,27 @@ func New(logger *zap.Logger, ehlo string, from mail.Address) (*sender, error) {
 	return &sender{logger: logger, dialer: &dialer, ehlo: ehlo, from: from, fromHost: fromHost}, nil
 }
 
+func (s *sender) SetBind(bind net.IP) {
+	if bind == nil || bind.Equal(net.IPv4zero) || bind.Equal(net.IPv6zero) {
+		s.dialer.LocalAddr = nil
+		return
+	}
+	s.dialer.LocalAddr = &net.TCPAddr{IP: bind }
+}
+
 func (s *sender) SetDKIM(selector string, privateKey []byte) {
 	s.dkimSelector = selector
 	s.privateKey = privateKey
 }
 
-func (s *sender) Send(ctx context.Context, to mail.Address) error {
+func (s *sender) Send(ctx context.Context, to *mail.Address) error {
 	s.logger.Debug("Sending...")
 
-	msg := []byte("From: Magic <magic@test.com>\r\nTo: R <rahul@redsift.io>\r\nSubject: Testing\r\n\r\nHello, you want testing")
-	return s.sendTo(ctx, to, msg)
+	send := fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: %s\r\n\r\n%s", s.from, to, makeSubject(), "Now from FMT print")
+	return s.sendTo(ctx, to, []byte(send))
 }
 
-func (s *sender) sendTo(ctx context.Context, to mail.Address, msg []byte) error {
+func (s *sender) sendTo(ctx context.Context, to *mail.Address, msg []byte) error {
 
 	who, host, err := LocalAndDomainForEmailAddress(to.Address)
 	if err != nil {

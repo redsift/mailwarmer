@@ -13,6 +13,7 @@ import (
 	"io/ioutil"
 	"github.com/redsift/mailwarmer/network"
 	"github.com/miekg/dns"
+	"math/rand"
 )
 
 const (
@@ -22,18 +23,23 @@ const (
 	EnvMaxRate = "SEND_MAX"
 	EnvRateCoefficient = "SEND_COEF"
 	EnvTimeOffset = "SEND_OFFSET"
+	EnvTimeEpoch = "SEND_EPOCH"
 	EnvSimuate = "SIMULATE"
 	EnvEhlo = "EHLO"
+	EnvDKIMKey= "DKIM_KEY"
+	EnvDKIMSelector= "DKIM_SELECTOR"
+	EnvSMTPFrom = "SMTP_FROM"
+	EnvSMTPTo = "SMTP_TO"
 )
 
 var (
 	Tag    = ""
 	Commit = ""
 
-	pSMTPBind  = kingpin.Flag("smtp-bind", "Bind the sender service to").Default("").Envar(EnvSMTPBind).String()
-	pMxBind    = kingpin.Flag("mx-bind", "Bind the receiver service to").Default("0.0.0.0:25").Envar(EnvMXBind).String()
+	pSMTPBind  = kingpin.Flag("smtp-bind", "Bind the sender service to").Default("0.0.0.0").Envar(EnvSMTPBind).IP()
 
-	pTimeOffset    = kingpin.Flag("send-time-offset", "Start the ramp from a future time").Default("24h").Envar(EnvTimeOffset).Duration()
+	pTimeOffset    = kingpin.Flag("send-time-offset", "Start the ramp from a future time").Default("0s").Envar(EnvTimeOffset).Duration()
+	pTimeEpoch    = kingpin.Flag("send-time-epoch", "Start the ramp from an absolute (unix epoch) time").Default("0").Envar(EnvTimeEpoch).Int64()
 
 	pMinRate    = kingpin.Flag("send-min-rate", "Minimum send rate per day").Default("50").Envar(EnvMinRate).Float64()
 	pCoefficient    = kingpin.Flag("send-coefficient", "Exponent multiplication factor").Default("40").Envar(EnvRateCoefficient).Float64()
@@ -43,6 +49,11 @@ var (
 	pEhlo = kingpin.Flag("ehlo", "SMTP ehlo. Either the FQDN or the address literal e.g. [192.0.2.1] or [IPv6:fe80::1]").Default("").Envar(EnvEhlo).String()
 	pSimuate    = kingpin.Flag("simulate", "Do not send emails").Short('s').Default("false").Envar(EnvSimuate).Bool()
 
+	pFrom  = kingpin.Flag("from", "RFC 5322 address, e.g. \"Jim Bailey <jimbo@example.com>\"").Short('f').Envar(EnvSMTPFrom).Required().String()
+	pTo  = kingpin.Flag("to", "List of RFC 5322 address, e.g. \"Jack Bailey <jack@example.com>\" (comma separator").Short('t').Envar(EnvSMTPTo).Required().String()
+
+	pDKIMKey  = kingpin.Flag("dkim-key", "DKIM key in pem format (required if --dkim-selector is set)").Default("").Envar(EnvDKIMKey).String()
+	pDKIMSelector  = kingpin.Flag("dkim-selector", "DKIM selector").Default("").Envar(EnvDKIMSelector).String()
 )
 
 const (
@@ -76,6 +87,8 @@ func limit(t float64) (rate.Limit, time.Duration) {
 
 func main() {
 	start := time.Now()
+	rand.Seed(start.UTC().UnixNano())
+
 	logger, err := zap.NewDevelopment()
 	if err != nil {
 		panic(err)
@@ -92,7 +105,9 @@ func main() {
 	kingpin.Version(version)
 	kingpin.Parse()
 
-
+	if te := *pTimeEpoch; te > 0 {
+		start = time.Unix(te, 0)
+	}
 
 	ip, err := network.MyIp()
 	if err != nil {
@@ -104,7 +119,17 @@ func main() {
 		panic(err)
 	}
 
-	logger.Info("Starting mailwarmer", zap.String("version", version), zap.Stringer("ip", ip), zap.String("ptr", ptr))
+	from, err := mail.ParseAddress(*pFrom)
+	if err != nil {
+		panic(err)
+	}
+
+	tos, err := mail.ParseAddressList(*pTo)
+	if err != nil {
+		panic(err)
+	}
+
+	logger.Info("Starting mailwarmer", zap.String("version", version), zap.Stringer("ip", ip), zap.String("ptr", ptr), zap.Stringer("from", from), zap.Int("recipients", len(tos)))
 
 	ehlo := *pEhlo
 	if ehlo == "" {
@@ -122,17 +147,24 @@ func main() {
 		logger.Warn("Deliverability issue detected, EHLO parameter should match PTR record")
 	}
 
-	sender, err := smtp.New(logger, ehlo, mail.Address{Name: "Magic", Address: "magic@test.com"})
+
+	sender, err := smtp.New(logger, ehlo, from)
 	if err != nil {
 		panic(err)
 	}
 
-	key, err := ioutil.ReadFile("./privkey.pem")
-	if err != nil {
-		panic(err)
+	if sel := *pDKIMSelector; sel != "" {
+		if *pDKIMKey == "" {
+			panic("DKIM private key must be supplied")
+		}
+		key, err := ioutil.ReadFile(*pDKIMKey)
+		if err != nil {
+			panic(err)
+		}
+		sender.SetDKIM(sel, key)
 	}
-	sender.SetDKIM("warm", key)
 
+	sender.SetBind(*pSMTPBind)
 
 	ctx := context.Background()
 
@@ -144,6 +176,10 @@ func main() {
 	for {
 		t := time.Now().Sub(start) + *pTimeOffset
 
+		if t.Seconds() < 0 {
+			logger.Error("Time tick is in the past", zap.Duration("duration", t))
+		}
+
 		if r := rateForT(t.Seconds()); r != rt {
 			rt = r
 			v, n := limit(rt)
@@ -153,7 +189,7 @@ func main() {
 
 		limiter.Wait(ctx)
 
-		to := mail.Address{Name: "Rahul Powar", Address: "rahul@redsift.io"}
+		to := tos[rand.Intn(len(tos))]
 
 		if *pSimuate {
 			i++

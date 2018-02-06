@@ -30,6 +30,15 @@
 
 [[projects]]
   branch = "master"
+  name = "github.com/redsift/go-foodfans"
+  packages = [
+    ".",
+    "lookup"
+  ]
+  revision = "6c6e105f4a3333b501ab036ce34f4430fa19be9b"
+
+[[projects]]
+  branch = "master"
   name = "github.com/toorop/go-dkim"
   packages = ["."]
   revision = "83672023c79e6b352bf9d4908e6c060c7a24323c"
@@ -112,6 +121,6 @@
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "469169bf94e271ba3e6a8fe617fbec5a99ca1c41205c4ed528b1f9750c7a34ea"
+  inputs-digest = "8a3176660ecc4f69360475444e7605a4e6cbb72955b8ed42127fd354876efa1d"
   solver-name = "gps-cdcl"
   solver-version = 1
